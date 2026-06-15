@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ESNext",
+    "lib": [
+      "ESNext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "react-native",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "src/*"
+      ],
+      "@components/*": [
+        "src/components/*"
+      ],
+      "@screens/*": [
+        "src/screens/*"
+      ],
+      "@hooks/*": [
+        "src/hooks/*"
+      ],
+      "@store/*": [
+        "src/store/*"
+      ],
+      "@utils/*": [
+        "src/utils/*"
+      ],
+      "@types/*": [
+        "src/types/*"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.d.ts",
+    "nativewind-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ],
+  "extends": "expo/tsconfig.base"
+}
