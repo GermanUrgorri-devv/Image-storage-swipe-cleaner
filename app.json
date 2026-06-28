@@ -2,6 +2,7 @@
   "expo": {
     "name": "Photo Swipe Cleaner",
     "slug": "image-storage-swipe-cleaner",
+    "scheme": "photoswipecleaner",
     "version": "1.0.0",
     "sdkVersion": "54.0.0",
     "orientation": "portrait",
@@ -32,7 +33,11 @@
       "permissions": [
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
       ]
     },
     "web": {
@@ -47,6 +52,11 @@
           "isAccessMediaLocationEnabled": true
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d4c85b21-240f-4b36-8bf2-c6ef4dc1ebc6"
+      }
+    }
   }
 }

@@ -21,6 +21,9 @@ interface GalleryState {
 
   /** Vacía completamente la cola de borrado (llamar tras borrado nativo exitoso) */
   clearPending: () => void;
+
+  /** Actualiza el tamaño de un asset pendiente (llamado desde background) */
+  updatePendingSize: (id: string, bytes: number) => void;
 }
 
 // ─── Derived Value Helper ────────────────────────────────────────────────────
@@ -62,4 +65,16 @@ export const useGalleryStore = create<GalleryState>((set) => ({
       pendingDeletions: [],
       totalMegabytes: 0,
     }),
+
+  updatePendingSize: (id, bytes) =>
+    set((state) => {
+      const updated = state.pendingDeletions.map((a) =>
+        a.id === id ? { ...a, fileSizeBytes: bytes } : a,
+      );
+      return {
+        pendingDeletions: updated,
+        totalMegabytes: recalculateMB(updated),
+      };
+    }),
 }));
+

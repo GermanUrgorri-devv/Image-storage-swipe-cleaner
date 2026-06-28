@@ -20,7 +20,8 @@ interface SwipeCardProps {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const SWIPE_THRESHOLD = 110;
+const SWIPE_THRESHOLD = 80;
+const SWIPE_VELOCITY_THRESHOLD = 0.5;
 const ROTATION_ANGLE = 12;
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -90,30 +91,29 @@ export const SwipeCard = React.memo<SwipeCardProps>(
           translateY.flattenOffset();
 
           const dx = gestureState.dx;
+          const vx = gestureState.vx;
 
-          if (dx < -SWIPE_THRESHOLD) {
+          const isSwipeLeft = dx < -SWIPE_THRESHOLD || vx < -SWIPE_VELOCITY_THRESHOLD;
+          const isSwipeRight = dx > SWIPE_THRESHOLD || vx > SWIPE_VELOCITY_THRESHOLD;
+
+          if (isSwipeLeft) {
+            // Llamar al handler INMEDIATAMENTE, sin esperar a que termine la animación
+            onSwipeLeftRef.current(assetRef.current);
             // Swipe izquierdo → BORRAR
-            Animated.spring(translateX, {
+            Animated.timing(translateX, {
               toValue: -700,
+              duration: 200,
               useNativeDriver: true,
-              damping: 15,
-            }).start(() => {
-              onSwipeLeftRef.current(assetRef.current);
-              // Resetear para reutilización
-              translateX.setValue(0);
-              translateY.setValue(0);
-            });
-          } else if (dx > SWIPE_THRESHOLD) {
+            }).start();
+          } else if (isSwipeRight) {
+            // Llamar al handler INMEDIATAMENTE
+            onSwipeRightRef.current(assetRef.current);
             // Swipe derecho → GUARDAR
-            Animated.spring(translateX, {
+            Animated.timing(translateX, {
               toValue: 700,
+              duration: 200,
               useNativeDriver: true,
-              damping: 15,
-            }).start(() => {
-              onSwipeRightRef.current(assetRef.current);
-              translateX.setValue(0);
-              translateY.setValue(0);
-            });
+            }).start();
           } else {
             // No superó el umbral → volver al centro
             Animated.parallel([
