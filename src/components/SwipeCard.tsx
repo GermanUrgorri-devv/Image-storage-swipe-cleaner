@@ -8,6 +8,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import type { AssetItem } from '../types';
+import { formatMB, bytesToMB } from '../utils/fileUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -154,8 +155,17 @@ export const SwipeCard = React.memo<SwipeCardProps>(
         <Image
           source={{ uri: asset.uri }}
           style={styles.image}
-          resizeMode="cover"
+          resizeMode="contain"
         />
+
+        {/* Overlay TAMAÑO (Top Left) */}
+        {asset.fileSizeBytes != null && (
+          <View style={styles.sizeOverlay}>
+            <Text style={styles.sizeText}>
+              {formatMB(bytesToMB(asset.fileSizeBytes))}
+            </Text>
+          </View>
+        )}
 
         {/* Overlay BORRAR */}
         <Animated.View
@@ -192,6 +202,7 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 24,
     overflow: 'hidden',
+    backgroundColor: '#0a0a0a', // bg-neutral-950
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.4,
@@ -231,5 +242,19 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: '900',
     letterSpacing: 4,
+  },
+  sizeOverlay: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  sizeText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });

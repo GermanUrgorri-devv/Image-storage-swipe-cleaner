@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system';
-import type { AssetItem, PermissionStatus } from '../types';
+import * as FileSystem from 'expo-file-system/legacy';
+import type { AssetItem, PermissionStatus, SortOption } from '../types';
 import { bytesToMB } from '../utils/fileUtils';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -40,6 +40,8 @@ interface GalleryManagerActions {
   loadNextPage: () => Promise<void>;
   loadAlbums: () => Promise<void>;
   getFileSizeLazy: (asset: AssetItem) => Promise<number | null>;
+  /** Precalcula tamaños de todos los assets cargados en background (fire-and-forget) */
+  preloadAllSizes: () => void;
   /** Force refresh permission debug info without requesting new permissions */
   refreshPermissionDebug: () => Promise<void>;
 }
@@ -47,11 +49,101 @@ interface GalleryManagerActions {
 interface LoadOptions {
   albumId?: string;
   reset?: boolean;
+  sortOption?: SortOption;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 20;
+
+// ─── Sort Mapping ────────────────────────────────────────────────────────────
+
+/**
+ * Mapea la SortOption del store a parámetros de MediaLibrary.SortBy.
+ * - size_desc / size_asc no son soportados nativamente → fallback a creationTime.
+ */
+function mapSortOption(
+  option: SortOption = 'date_desc',
+): MediaLibrary.AssetsOptions['sortBy'] {
+  switch (option) {
+    case 'date_desc':
+      return [[MediaLibrary.SortBy.creationTime, false]];
+    case 'date_asc':
+      return [[MediaLibrary.SortBy.creationTime, true]];
+    case 'name_asc':
+      return [[MediaLibrary.SortBy.default, true]];
+    case 'name_desc':
+      return [[MediaLibrary.SortBy.default, false]];
+    default:
+      // size_desc / size_asc: se gestionan aparte en loadAllAndSortBySize
+      return [[MediaLibrary.SortBy.creationTime, false]];
+  }
+}
+
+/** Devuelve true si el sort requiere cargar todos los assets y ordenar en memoria. */
+function isSizeSort(option: SortOption): boolean {
+  return option === 'size_desc' || option === 'size_asc';
+}
+
+/**
+ * Obtiene el tamaño en bytes de un asset.
+ * Fast path: intenta stat() directo sobre asset.uri (funciona en dev builds con file:// URIs).
+ * Slow path: resuelve a localUri vía getAssetInfoAsync y luego stat().
+ */
+async function fetchAssetSize(
+  asset: MediaLibrary.Asset,
+  cache: Map<string, number>,
+): Promise<number> {
+  if (cache.has(asset.id)) return cache.get(asset.id)!;
+
+  // Fast path: stat() directo sobre el URI del asset
+  try {
+    const direct = await FileSystem.getInfoAsync(asset.uri);
+    if (direct.exists && 'size' in direct && typeof direct.size === 'number') {
+      cache.set(asset.id, direct.size);
+      return direct.size;
+    }
+  } catch {
+    // URI no soportada por FileSystem (e.g. content://), seguir al slow path
+  }
+
+  // Slow path: resolver localUri primero
+  try {
+    const info = await MediaLibrary.getAssetInfoAsync(asset.id);
+    const uri = info.localUri ?? info.uri;
+    const fileInfo = await FileSystem.getInfoAsync(uri);
+    if (fileInfo.exists && 'size' in fileInfo && typeof fileInfo.size === 'number') {
+      cache.set(asset.id, fileInfo.size);
+      return fileInfo.size;
+    }
+  } catch {
+    // fall through to 0
+  }
+  return 0;
+}
+
+/**
+ * Ejecuta un array de funciones async en lotes de tamaño `concurrency`.
+ * Devuelve los resultados en el mismo orden que las tareas de entrada.
+ */
+async function runConcurrent<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency: number,
+): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < tasks.length) {
+      const i = index++;
+      results[i] = await tasks[i]();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -114,6 +206,7 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
   // Cursor para la paginación de expo-media-library
   const endCursorRef = useRef<string | undefined>(undefined);
   const currentAlbumRef = useRef<string | undefined>(undefined);
+  const currentSortRef = useRef<SortOption>('date_desc');
 
   // Cache de tamaños ya calculados: assetId → bytes
   const fileSizeCache = useRef<Map<string, number>>(new Map());
@@ -243,7 +336,7 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
 
   const loadAssets = useCallback(
     async (options: LoadOptions = {}): Promise<void> => {
-      const { albumId, reset = false } = options;
+      const { albumId, reset = false, sortOption } = options;
 
       setState((prev) => ({ ...prev, isLoading: true, error: null }));
 
@@ -252,11 +345,86 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
       }
 
       currentAlbumRef.current = albumId;
+      if (sortOption) {
+        currentSortRef.current = sortOption;
+      }
 
+      const activeSortOption = currentSortRef.current;
+
+      // ── Rama especial: sort por tamaño ─────────────────────────────────
+      if (isSizeSort(activeSortOption)) {
+        try {
+          // 1. Cargar TODOS los assets de forma paginada
+          const allRaw: MediaLibrary.Asset[] = [];
+          let cursor: string | undefined = reset ? undefined : endCursorRef.current;
+          let hasMore = true;
+
+          while (hasMore) {
+            const page = await MediaLibrary.getAssetsAsync({
+              first: 500, // páginas grandes para minimizar roundtrips
+              sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+              mediaType: [MediaLibrary.MediaType.photo],
+              ...(albumId && { album: albumId }),
+              ...(cursor && { after: cursor }),
+            });
+
+            allRaw.push(...page.assets);
+            hasMore = page.hasNextPage;
+            cursor = page.endCursor;
+
+            // Actualizar UI con progreso mientras carga
+            setState((prev) => ({ ...prev, isLoading: true }));
+          }
+
+          // 2. Calcular tamaños — solo los que no estén cacheados
+          const uncachedTasks = allRaw
+            .filter((a) => !fileSizeCache.current.has(a.id))
+            .map((asset) => () => fetchAssetSize(asset, fileSizeCache.current));
+
+          if (uncachedTasks.length > 0) {
+            await runConcurrent(uncachedTasks, 25);
+          }
+
+          // 3. Construir AssetItems con tamaño ya calculado (del cache)
+          const itemsWithSize: AssetItem[] = allRaw.map((asset) => {
+            const size = fileSizeCache.current.get(asset.id);
+            return {
+              ...asset,
+              fileSizeBytes: size != null && size > 0 ? size : null,
+            };
+          });
+
+          // 4. Ordenar en memoria
+          const sorted = [...itemsWithSize].sort((a, b) => {
+            const sa = a.fileSizeBytes ?? 0;
+            const sb = b.fileSizeBytes ?? 0;
+            return activeSortOption === 'size_desc' ? sb - sa : sa - sb;
+          });
+
+          // 5. No hay páginación adicional: ya tenemos todo
+          endCursorRef.current = undefined;
+
+          setState((prev) => ({
+            ...prev,
+            assets: reset ? sorted : [...prev.assets, ...sorted],
+            hasNextPage: false,
+            isLoading: false,
+          }));
+        } catch (err) {
+          setState((prev) => ({
+            ...prev,
+            isLoading: false,
+            error: 'Error al cargar y ordenar las fotos por tamaño.',
+          }));
+        }
+        return;
+      }
+
+      // ── Rama normal: sort nativo de MediaLibrary ────────────────────────
       try {
         const query: MediaLibrary.AssetsOptions = {
           first: PAGE_SIZE,
-          sortBy: [MediaLibrary.SortBy.creationTime],
+          sortBy: mapSortOption(activeSortOption),
           mediaType: [MediaLibrary.MediaType.photo],
           ...(albumId && { album: albumId }),
           ...(endCursorRef.current && { after: endCursorRef.current }),
@@ -292,8 +460,13 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
   // ─── loadNextPage ───────────────────────────────────────────────────────
 
   const loadNextPage = useCallback(async (): Promise<void> => {
+    // Size sort ya cargó todo: no hay siguiente página real
+    if (isSizeSort(currentSortRef.current)) return;
     if (!state.hasNextPage || state.isLoading) return;
-    await loadAssets({ albumId: currentAlbumRef.current });
+    await loadAssets({
+      albumId: currentAlbumRef.current,
+      sortOption: currentSortRef.current,
+    });
   }, [state.hasNextPage, state.isLoading, loadAssets]);
 
   // ─── getFileSizeLazy ────────────────────────────────────────────────────
@@ -357,6 +530,37 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
     [],
   );
 
+  // ─── preloadAllSizes ─────────────────────────────────────────────────────────
+
+  /**
+   * Precalcula tamaños de TODOS los assets cargados en background.
+   * Usa baja concurrencia (5) para no competir con la UI.
+   * Cuando el usuario active sort por tamaño, la mayoría de tamaños ya estarán cacheados.
+   */
+  const preloadAllSizes = useCallback(() => {
+    const currentAssets = state.assets;
+    const uncached = currentAssets.filter((a) => !fileSizeCache.current.has(a.id));
+    if (uncached.length === 0) return;
+
+    // Fire-and-forget: no bloquea la UI
+    const tasks = uncached.map(
+      (asset) => () => fetchAssetSize(asset, fileSizeCache.current),
+    );
+    runConcurrent(tasks, 5).then((sizes) => {
+      // Actualizar assets con los tamaños calculados en batch
+      setState((prev) => ({
+        ...prev,
+        assets: prev.assets.map((a) => {
+          if (a.fileSizeBytes != null) return a;
+          const cached = fileSizeCache.current.get(a.id);
+          return cached != null && cached > 0 ? { ...a, fileSizeBytes: cached } : a;
+        }),
+      }));
+    }).catch(() => {
+      // Silencioso — es preloading en background
+    });
+  }, [state.assets]);
+
   return {
     ...state,
     requestPermissions,
@@ -364,6 +568,7 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
     loadAssets,
     loadNextPage,
     getFileSizeLazy,
+    preloadAllSizes,
     refreshPermissionDebug,
   };
 }

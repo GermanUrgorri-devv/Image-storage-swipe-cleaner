@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AssetItem } from '../types';
+import type { AssetItem, SortOption } from '../types';
 import { sumFileSizes } from '../utils/fileUtils';
 
 // ─── State Shape ─────────────────────────────────────────────────────────────
@@ -10,6 +10,12 @@ interface GalleryState {
 
   /** Megabytes totales calculados de los assets pendientes */
   totalMegabytes: number;
+
+  /** Álbum activo para filtrar fotos (null = "Todo") */
+  activeAlbumId: string | null;
+
+  /** Opción de ordenación activa */
+  sortOption: SortOption;
 
   // ─── Actions ───────────────────────────────────────────────────────────────
 
@@ -24,6 +30,12 @@ interface GalleryState {
 
   /** Actualiza el tamaño de un asset pendiente (llamado desde background) */
   updatePendingSize: (id: string, bytes: number) => void;
+
+  /** Cambia el álbum activo (null = "Todo") */
+  setActiveAlbum: (albumId: string | null) => void;
+
+  /** Cambia la opción de ordenación */
+  setSortOption: (option: SortOption) => void;
 }
 
 // ─── Derived Value Helper ────────────────────────────────────────────────────
@@ -37,6 +49,8 @@ function recalculateMB(assets: AssetItem[]): number {
 export const useGalleryStore = create<GalleryState>((set) => ({
   pendingDeletions: [],
   totalMegabytes: 0,
+  activeAlbumId: null,
+  sortOption: 'date_desc',
 
   addToPending: (asset) =>
     set((state) => {
@@ -76,5 +90,10 @@ export const useGalleryStore = create<GalleryState>((set) => ({
         totalMegabytes: recalculateMB(updated),
       };
     }),
-}));
 
+  setActiveAlbum: (albumId) =>
+    set({ activeAlbumId: albumId }),
+
+  setSortOption: (option) =>
+    set({ sortOption: option }),
+}));

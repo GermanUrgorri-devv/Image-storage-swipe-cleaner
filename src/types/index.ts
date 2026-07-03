@@ -20,3 +20,17 @@ export type RootStackParamList = {
  * Estado de los permisos del sistema de archivos multimedia.
  */
 export type PermissionStatus = 'undetermined' | 'granted' | 'denied';
+
+/**
+ * Opciones de ordenación disponibles para la galería.
+ * - date_*: Orden por fecha de creación (soportado nativamente por MediaLibrary).
+ * - size_*: Orden por tamaño de archivo (requiere sort en memoria — TODO).
+ * - name_*: Orden por nombre de archivo.
+ */
+export type SortOption =
+  | 'date_desc'
+  | 'date_asc'
+  | 'size_desc'
+  | 'size_asc'
+  | 'name_asc'
+  | 'name_desc';

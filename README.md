@@ -22,21 +22,21 @@
 ## 🚀 Instalación
 
 > **Prerrequisito:** Node.js v20 LTS — [Descargar aquí](https://nodejs.org/en/download)
+> **En tu teléfono:** Para escanear el QR en los siguientes pasos, necesitas tener instalada tu **Development Build** (APK/IPA compilada con EAS) si usas `--dev-client`, o la app de **Expo Go** para pruebas estándar.
 
 ```bash
 # 1. Instalar dependencias
 npm install
 
-# 2. Instalar dependencias nativas con Expo CLI
-npx expo install
+# 2. Iniciar el servidor de desarrollo (Development Build)
+# Recomendado ya que el proyecto incluye expo-dev-client
+npx expo start --dev-client
 
-# 3. Iniciar el servidor de desarrollo
-npx expo start
+# 3. Para testear en un dispositivo físico con problemas de red local:
+npx expo start --dev-client --tunnel --scheme photoswipecleaner
 
-# Para Android (emulador o dispositivo físico)
+# 4. Para emuladores:
 npx expo start --android
-
-# Para iOS (requiere macOS + Xcode)
 npx expo start --ios
 ```
 

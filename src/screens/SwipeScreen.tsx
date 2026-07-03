@@ -13,8 +13,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SwipeCard } from '../components/SwipeCard';
+import { TopBar } from '../components/TopBar';
+import { SortBottomSheet } from '../components/SortBottomSheet';
 import { useGalleryManager } from '../hooks/useGalleryManager';
 import { useGalleryStore } from '../store/useGalleryStore';
+import { formatMB } from '../utils/fileUtils';
 import type { AssetItem, RootStackParamList } from '../types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -38,8 +41,12 @@ export default function SwipeScreen(): React.JSX.Element {
   const navigation = useNavigation<SwipeScreenNav>();
   const addToPending = useGalleryStore((s) => s.addToPending);
   const pendingCount = useGalleryStore((s) => s.pendingDeletions.length);
+  const totalMegabytes = useGalleryStore((s) => s.totalMegabytes);
+  const activeAlbumId = useGalleryStore((s) => s.activeAlbumId);
+  const sortOption = useGalleryStore((s) => s.sortOption);
   const {
     assets,
+    albums,
     isLoading,
     hasNextPage,
     permissionStatus,
@@ -48,12 +55,15 @@ export default function SwipeScreen(): React.JSX.Element {
     requestPermissions,
     refreshPermissionDebug,
     loadAssets,
+    loadAlbums,
     loadNextPage,
     getFileSizeLazy,
+    preloadAllSizes,
   } = useGalleryManager();
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDebug, setShowDebug] = useState(false);
+  const [isSortMenuVisible, setIsSortMenuVisible] = useState(false);
 
   // ─── Init ────────────────────────────────────────────────────────────────
 
@@ -61,12 +71,29 @@ export default function SwipeScreen(): React.JSX.Element {
     const init = async () => {
       const granted = await requestPermissions();
       if (granted) {
-        await loadAssets({ reset: true });
+        await Promise.all([
+          loadAssets({ reset: true, sortOption }),
+          loadAlbums(),
+        ]);
       }
     };
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ─── Reaccionar a cambios de álbum o sort del store ──────────────────────
+
+  useEffect(() => {
+    // Solo disparar si ya tenemos permisos (evitar race condition en init)
+    if (permissionStatus !== 'granted') return;
+
+    setCurrentIndex(0);
+    loadAssets({
+      albumId: activeAlbumId ?? undefined,
+      reset: true,
+      sortOption,
+    });
+  }, [activeAlbumId, sortOption]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Paginación automática cuando quedan pocas cards ─────────────────────
 
@@ -76,6 +103,28 @@ export default function SwipeScreen(): React.JSX.Element {
       loadNextPage();
     }
   }, [currentIndex, assets.length, hasNextPage, isLoading, loadNextPage]);
+
+  // ─── Precalcular tamaño de las cards visibles ─────────────────────────────
+
+  useEffect(() => {
+    // Precalcular el tamaño de las cartas visibles (prioridad alta)
+    const toPreload = assets.slice(currentIndex, currentIndex + MAX_VISIBLE_CARDS);
+    for (const asset of toPreload) {
+      if (asset.fileSizeBytes == null) {
+        getFileSizeLazy(asset);
+      }
+    }
+  }, [currentIndex, assets, getFileSizeLazy]);
+
+  // ─── Background preload: calcular tamaños de TODOS los assets ────────────
+
+  useEffect(() => {
+    // Arranca el preloading de tamaños en background con baja prioridad
+    // para que cuando el usuario pulse "ordenar por tamaño" sea casi instantáneo
+    if (assets.length > 0 && !isLoading) {
+      preloadAllSizes();
+    }
+  }, [assets.length, isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Swipe Handlers ──────────────────────────────────────────────────────
 
@@ -98,6 +147,16 @@ export default function SwipeScreen(): React.JSX.Element {
 
   const handleSwipeRight = useCallback((_asset: AssetItem) => {
     setCurrentIndex((prev) => prev + 1);
+  }, []);
+
+  // ─── Sort Menu Handlers ───────────────────────────────────────────────────
+
+  const handleOpenSort = useCallback(() => {
+    setIsSortMenuVisible(true);
+  }, []);
+
+  const handleCloseSort = useCallback(() => {
+    setIsSortMenuVisible(false);
   }, []);
 
   // ─── Estados especiales ───────────────────────────────────────────────────
@@ -277,14 +336,14 @@ export default function SwipeScreen(): React.JSX.Element {
 
   return (
     <SafeAreaView className="flex-1 bg-neutral-950">
-      {/* Header */}
-      <View className="px-6 pt-4 pb-2">
+      {/* ─── TopBar: Ribbon de álbumes + botón de sort ─── */}
+      <TopBar albums={albums} onSortPress={handleOpenSort} />
+
+      {/* Contador de fotos */}
+      <View className="px-6 pt-3 pb-1">
         <Text className="text-neutral-500 text-xs font-semibold tracking-widest uppercase">
           Foto {currentIndex + 1} de {assets.length}
           {hasNextPage ? '+' : ''}
-        </Text>
-        <Text className="text-white text-2xl font-bold mt-1">
-          Limpieza de galería
         </Text>
       </View>
 
@@ -302,6 +361,15 @@ export default function SwipeScreen(): React.JSX.Element {
 
       {/* Stack de cards */}
       <View className="flex-1 items-center justify-center">
+        {/* Overlay de carga cuando se están reordenando/recargando las fotos */}
+        {isLoading && assets.length > 0 && (
+          <View className="absolute inset-0 z-40 items-center justify-center bg-neutral-950/80">
+            <ActivityIndicator size="large" color="#8b5cf6" />
+            <Text className="text-neutral-400 mt-4 text-sm">
+              Ordenando fotos por tamaño…
+            </Text>
+          </View>
+        )}
         {isEmpty ? (
           <View className="items-center justify-center px-8">
             <Text className="text-6xl mb-4">✨</Text>
@@ -349,7 +417,7 @@ export default function SwipeScreen(): React.JSX.Element {
 
       {/* FAB — Contador de pendientes */}
       {pendingCount > 0 && (
-        <View className="absolute bottom-8 right-6">
+        <View className="absolute bottom-8 right-6 z-50" style={{ elevation: 50 }}>
           <TouchableOpacity
             onPress={() => navigation.navigate('Review')}
             className="bg-violet-600 rounded-2xl px-5 py-4 shadow-lg flex-row items-center gap-3"
@@ -361,12 +429,18 @@ export default function SwipeScreen(): React.JSX.Element {
               </Text>
             </View>
             <Text className="text-white font-bold text-sm">
-              Revisar selección
+              Revisar ({formatMB(totalMegabytes)})
             </Text>
             <Text className="text-violet-300 text-lg">→</Text>
           </TouchableOpacity>
         </View>
       )}
+
+      {/* ─── Sort Bottom Sheet ─── */}
+      <SortBottomSheet
+        visible={isSortMenuVisible}
+        onClose={handleCloseSort}
+      />
     </SafeAreaView>
   );
 }
