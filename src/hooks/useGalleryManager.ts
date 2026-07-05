@@ -32,6 +32,14 @@ interface GalleryManagerState {
   error: string | null;
   /** Debug info for the last permission check (both get and request) */
   permissionDebug: PermissionDebugInfo[];
+  /** Mapa de tamaños totales por álbum: albumId → total bytes */
+  albumSizes: Map<string, number>;
+  /** Tamaño total de todos los assets (para la pestaña "Todo") */
+  totalSize: number;
+  /** Set de IDs de álbumes cuyo tamaño ya ha sido calculado */
+  albumSizesComputed: Set<string>;
+  /** true mientras se están calculando los tamaños de álbumes */
+  albumSizesLoading: boolean;
 }
 
 interface GalleryManagerActions {
@@ -44,6 +52,8 @@ interface GalleryManagerActions {
   preloadAllSizes: () => void;
   /** Force refresh permission debug info without requesting new permissions */
   refreshPermissionDebug: () => Promise<void>;
+  /** Calcula tamaños de todos los álbumes en background */
+  computeAlbumSizes: () => void;
 }
 
 interface LoadOptions {
@@ -201,6 +211,10 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
     hasNextPage: true,
     error: null,
     permissionDebug: [],
+    albumSizes: new Map(),
+    totalSize: 0,
+    albumSizesComputed: new Set(),
+    albumSizesLoading: false,
   });
 
   // Cursor para la paginación de expo-media-library
@@ -489,7 +503,7 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
         const uri = assetInfo.localUri ?? assetInfo.uri;
 
         const info = await FileSystem.getInfoAsync(uri);
-        
+
         let bytes: number | null = null;
 
         if (info.exists && 'size' in info && typeof info.size === 'number') {
@@ -561,6 +575,82 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
     });
   }, [state.assets]);
 
+  // ─── computeAlbumSizes ──────────────────────────────────────────────────────
+
+  /**
+   * Calcula el tamaño total de cada álbum en background.
+   * Itera sobre todos los assets de cada álbum y suma sus tamaños.
+   * También calcula el tamaño total global (para la pestaña "Todo").
+   */
+  const computeAlbumSizes = useCallback(() => {
+    const currentAlbums = state.albums;
+    if (currentAlbums.length === 0) return;
+
+    // Marcar como cargando
+    setState((prev) => ({ ...prev, albumSizesLoading: true }));
+
+    // Fire-and-forget: no bloquea la UI
+    (async () => {
+      try {
+        const sizes = new Map<string, number>();
+        const computed = new Set<string>();
+        let globalTotal = 0;
+
+        for (const album of currentAlbums) {
+          let albumTotal = 0;
+          let cursor: string | undefined = undefined;
+          let hasMore = true;
+
+          while (hasMore) {
+            const page = await MediaLibrary.getAssetsAsync({
+              first: 500,
+              sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+              mediaType: [MediaLibrary.MediaType.photo],
+              album: album.id,
+              ...(cursor && { after: cursor }),
+            });
+
+            // Calcular tamaños de assets no cacheados
+            const uncachedTasks = page.assets
+              .filter((a) => !fileSizeCache.current.has(a.id))
+              .map((asset) => () => fetchAssetSize(asset, fileSizeCache.current));
+
+            if (uncachedTasks.length > 0) {
+              await runConcurrent(uncachedTasks, 10);
+            }
+
+            // Sumar tamaños
+            for (const asset of page.assets) {
+              const size = fileSizeCache.current.get(asset.id) ?? 0;
+              albumTotal += size;
+            }
+
+            hasMore = page.hasNextPage;
+            cursor = page.endCursor;
+          }
+
+          sizes.set(album.id, albumTotal);
+          computed.add(album.id);
+          globalTotal += albumTotal;
+
+          // Actualizar progresivamente: tamaño + marcar álbum como calculado
+          setState((prev) => ({
+            ...prev,
+            albumSizes: new Map(sizes),
+            albumSizesComputed: new Set(computed),
+            totalSize: globalTotal,
+          }));
+        }
+
+        // Todos los álbumes calculados
+        setState((prev) => ({ ...prev, albumSizesLoading: false }));
+      } catch (err) {
+        console.warn('[computeAlbumSizes] Error:', err);
+        setState((prev) => ({ ...prev, albumSizesLoading: false }));
+      }
+    })();
+  }, [state.albums]);
+
   return {
     ...state,
     requestPermissions,
@@ -570,5 +660,6 @@ export function useGalleryManager(): GalleryManagerState & GalleryManagerActions
     getFileSizeLazy,
     preloadAllSizes,
     refreshPermissionDebug,
+    computeAlbumSizes,
   };
 }

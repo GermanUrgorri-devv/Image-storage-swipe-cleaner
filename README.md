@@ -7,7 +7,7 @@
 
 | Capa | Tecnología |
 |------|-----------|
-| Framework | React Native + Expo SDK 51 |
+| Framework | React Native + Expo SDK 54 |
 | Lenguaje | TypeScript (strict mode) |
 | Estado global | Zustand |
 | Animaciones | React Native Reanimated v3 |
@@ -22,7 +22,12 @@
 ## 🚀 Instalación
 
 > **Prerrequisito:** Node.js v20 LTS — [Descargar aquí](https://nodejs.org/en/download)
-> **En tu teléfono:** Para escanear el QR en los siguientes pasos, necesitas tener instalada tu **Development Build** (APK/IPA compilada con EAS) si usas `--dev-client`, o la app de **Expo Go** para pruebas estándar.
+>
+> **En tu teléfono:** Este proyecto usa `expo-dev-client`. Necesitas instalar la **Development Build** del proyecto, que es un APK personalizado compilado con EAS.
+>
+> 📲 **Descarga e instala el APK desde aquí:** [Photo Swipe Cleaner — Development Build](https://expo.dev/accounts/german-devv/projects/image-storage-swipe-cleaner/builds/7fb03e34-bcb4-48f7-b404-973251193309)
+>
+> Una vez instalada la app en tu teléfono, ya puedes escanear el QR del servidor de desarrollo para conectarte.
 
 ```bash
 # 1. Instalar dependencias
@@ -35,10 +40,25 @@ npx expo start --dev-client
 # 3. Para testear en un dispositivo físico con problemas de red local:
 npx expo start --dev-client --tunnel --scheme photoswipecleaner
 
-# 4. Para emuladores:
-npx expo start --android
-npx expo start --ios
 ```
+
+---
+
+## 📦 Cómo crear el APK (Producción / Preview)
+
+Para generar el archivo `.apk` instalable en cualquier dispositivo Android, utilizamos EAS (Expo Application Services). El proyecto ya está configurado para ello.
+
+```bash
+# 1. Instalar la herramienta de Expo Application Services (si no la tienes)
+npm install -g eas-cli
+
+# 2. Iniciar sesión con tu cuenta de Expo
+eas login
+
+# 3. Construir el APK usando el perfil "preview" (configurado en eas.json)
+eas build --platform android --profile preview
+```
+Al terminar, la terminal te dará un enlace directo para descargar tu archivo `.apk`.
 
 ---
 

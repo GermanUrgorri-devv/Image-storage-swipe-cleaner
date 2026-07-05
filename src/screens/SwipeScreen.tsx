@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Feather } from '@expo/vector-icons';
 import { SwipeCard } from '../components/SwipeCard';
+import type { SwipeCardRef } from '../components/SwipeCard';
 import { TopBar } from '../components/TopBar';
 import { SortBottomSheet } from '../components/SortBottomSheet';
 import { useGalleryManager } from '../hooks/useGalleryManager';
@@ -52,6 +54,10 @@ export default function SwipeScreen(): React.JSX.Element {
     permissionStatus,
     permissionDebug,
     error,
+    albumSizes,
+    totalSize,
+    albumSizesComputed,
+    albumSizesLoading,
     requestPermissions,
     refreshPermissionDebug,
     loadAssets,
@@ -59,11 +65,15 @@ export default function SwipeScreen(): React.JSX.Element {
     loadNextPage,
     getFileSizeLazy,
     preloadAllSizes,
+    computeAlbumSizes,
   } = useGalleryManager();
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDebug, setShowDebug] = useState(false);
   const [isSortMenuVisible, setIsSortMenuVisible] = useState(false);
+
+  // Ref a la tarjeta top para control programático (botones)
+  const topCardRef = useRef<SwipeCardRef>(null);
 
   // ─── Init ────────────────────────────────────────────────────────────────
 
@@ -126,6 +136,14 @@ export default function SwipeScreen(): React.JSX.Element {
     }
   }, [assets.length, isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Calcular tamaños de álbumes cuando se cargan ──────────────────────────
+
+  useEffect(() => {
+    if (albums.length > 0) {
+      computeAlbumSizes();
+    }
+  }, [albums]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Swipe Handlers ──────────────────────────────────────────────────────
 
   const handleSwipeLeft = useCallback(
@@ -157,6 +175,16 @@ export default function SwipeScreen(): React.JSX.Element {
 
   const handleCloseSort = useCallback(() => {
     setIsSortMenuVisible(false);
+  }, []);
+
+  // ─── Button Handlers (disparan swipe programático) ─────────────────────
+
+  const handleDeletePress = useCallback(() => {
+    topCardRef.current?.swipeLeft();
+  }, []);
+
+  const handleKeepPress = useCallback(() => {
+    topCardRef.current?.swipeRight();
   }, []);
 
   // ─── Estados especiales ───────────────────────────────────────────────────
@@ -337,7 +365,14 @@ export default function SwipeScreen(): React.JSX.Element {
   return (
     <SafeAreaView className="flex-1 bg-neutral-950">
       {/* ─── TopBar: Ribbon de álbumes + botón de sort ─── */}
-      <TopBar albums={albums} onSortPress={handleOpenSort} />
+      <TopBar
+        albums={albums}
+        onSortPress={handleOpenSort}
+        albumSizes={albumSizes}
+        totalSize={totalSize}
+        albumSizesComputed={albumSizesComputed}
+        albumSizesLoading={albumSizesLoading}
+      />
 
       {/* Contador de fotos */}
       <View className="px-6 pt-3 pb-1">
@@ -347,20 +382,10 @@ export default function SwipeScreen(): React.JSX.Element {
         </Text>
       </View>
 
-      {/* Instrucciones */}
-      <View className="flex-row justify-center gap-6 px-6 mb-4">
-        <View className="flex-row items-center gap-2">
-          <View className="w-3 h-3 rounded-full bg-red-500" />
-          <Text className="text-neutral-400 text-xs">← Borrar</Text>
-        </View>
-        <View className="flex-row items-center gap-2">
-          <View className="w-3 h-3 rounded-full bg-emerald-500" />
-          <Text className="text-neutral-400 text-xs">Guardar →</Text>
-        </View>
-      </View>
+
 
       {/* Stack de cards */}
-      <View className="flex-1 items-center justify-center">
+      <View className="flex-1 items-center justify-start pt-6">
         {/* Overlay de carga cuando se están reordenando/recargando las fotos */}
         {isLoading && assets.length > 0 && (
           <View className="absolute inset-0 z-40 items-center justify-center bg-neutral-950/80">
@@ -403,6 +428,7 @@ export default function SwipeScreen(): React.JSX.Element {
                   }}
                 >
                   <SwipeCard
+                    ref={isTop ? topCardRef : undefined}
                     asset={asset}
                     onSwipeLeft={handleSwipeLeft}
                     onSwipeRight={handleSwipeRight}
@@ -415,24 +441,54 @@ export default function SwipeScreen(): React.JSX.Element {
         )}
       </View>
 
-      {/* FAB — Contador de pendientes */}
-      {pendingCount > 0 && (
-        <View className="absolute bottom-8 right-6 z-50" style={{ elevation: 50 }}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Review')}
-            className="bg-violet-600 rounded-2xl px-5 py-4 shadow-lg flex-row items-center gap-3"
-            activeOpacity={0.85}
-          >
-            <View className="bg-white/20 rounded-full w-7 h-7 items-center justify-center">
-              <Text className="text-white text-xs font-black">
-                {pendingCount}
+      {/* ─── Botones de acción + FAB Revisar ─── */}
+      {!isEmpty && (
+        <View 
+          className="absolute bottom-8 left-0 right-0 px-6 z-50" 
+          style={{ gap: 10, elevation: 50 }}
+        >
+          {/* Fila de botones Borrar / Guardar */}
+          <View className="flex-row" style={{ gap: 10 }}>
+            <TouchableOpacity
+              onPress={handleDeletePress}
+              className="flex-1 rounded-2xl px-5 py-4 shadow-lg flex-row items-center justify-center"
+              style={{ backgroundColor: '#dc2626', gap: 8 }}
+              activeOpacity={0.85}
+            >
+              <Feather name="arrow-left" size={20} color="white" />
+              <Text className="text-white font-bold text-sm">Borrar</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleKeepPress}
+              className="flex-1 rounded-2xl px-5 py-4 shadow-lg flex-row items-center justify-center"
+              style={{ backgroundColor: '#059669', gap: 8 }}
+              activeOpacity={0.85}
+            >
+              <Text className="text-white font-bold text-sm">Guardar</Text>
+              <Feather name="arrow-right" size={20} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Botón Revisar selección */}
+          {pendingCount > 0 && (
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Review')}
+              className="bg-violet-600 rounded-2xl px-5 py-4 shadow-lg flex-row items-center justify-center"
+              style={{ gap: 12 }}
+              activeOpacity={0.85}
+            >
+              <View className="bg-white/20 rounded-full w-7 h-7 items-center justify-center">
+                <Text className="text-white text-xs font-black">
+                  {pendingCount}
+                </Text>
+              </View>
+              <Text className="text-white font-bold text-sm">
+                Revisar ({formatMB(totalMegabytes)})
               </Text>
-            </View>
-            <Text className="text-white font-bold text-sm">
-              Revisar ({formatMB(totalMegabytes)})
-            </Text>
-            <Text className="text-violet-300 text-lg">→</Text>
-          </TouchableOpacity>
+              <Feather name="arrow-right" size={18} color="#c4b5fd" />
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
